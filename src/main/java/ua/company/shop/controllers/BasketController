@@ -1,0 +1,156 @@
+package ua.company.shop.controllers;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.User;
+import org.springframework.stereotype.Controller;
+import org.springframework.ui.Model;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import ua.company.shop.domain.Good;
+import ua.company.shop.domain.GoodType;
+import ua.company.shop.security.CustomUser;
+import ua.company.shop.security.UserService;
+import ua.company.shop.services.*;
+
+import java.util.ArrayList;
+import java.util.List;
+
+@Controller
+public class BasketController {
+
+    @Autowired
+    private GoodService goodService;
+    @Autowired
+    private UserService userService;
+    @Autowired
+    private SpinningService spinningService;
+    @Autowired
+    private ReelService reelService;
+    @Autowired
+    private LineService lineService;
+
+    @RequestMapping("add{goodKind}ToBasket")
+    public String addTBasket(Model model, @RequestParam int id, @PathVariable("goodKind") String goodKind){
+        CustomUser customUser = null;
+        Good good = null;
+        try{
+            User user = (User) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
+            customUser = userService.getUserByLogin(user.getUsername());
+        } catch (Exception ignored){}
+
+        List<? extends Good> list = getService(goodKind).list();
+        for (Good g : list){
+            if (g.getId()==id){
+                assert customUser != null;
+                g.addUser(customUser);
+                good = g;
+                getService(goodKind).persist(good);
+                break;
+            }
+        }
+        userInitializer(model);
+        initializer(model, 1, goodKind);
+        assert good != null;
+        if (customUser.getGoods().contains(good))
+            model.addAttribute("OkMessage", good.getName());
+        else model.addAttribute("OkMessage", "PROBLEM");
+        if (GoodType.exists(goodKind))
+            return "{otherGoods}s";
+        else
+            return goodKind + "s";
+    }
+
+    @RequestMapping("/myBasket")
+    public String myBasket(Model model){
+        CustomUser customUser = null;
+        try{
+            User user = (User) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
+            customUser = userService.getUserByLogin(user.getUsername());
+            userInitializer(model);
+        } catch (Exception ignored){}
+        if (customUser!=null){
+            model.addAttribute("goods", customUser.getGoods());
+            sumCalc(model, customUser.getGoods());
+            return "myBasket";
+        } else {
+            userInitializer(model);
+            return "unauthorized";
+        }
+    }
+
+    @RequestMapping("/deleteFromBasket")
+    public String deleteFromBasket(Model model, @RequestParam int id){
+        CustomUser customUser = null;
+        try{
+            User user = (User) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
+            customUser = userService.getUserByLogin(user.getUsername());
+        } catch (Exception ignored){}
+
+        assert customUser != null;
+        List<? extends Good> list = customUser.getGoods();
+        for (Good g : list) {
+            if (g.getId() == id) {
+                g.removeUser(customUser);
+                goodService.persist(g);
+                break;
+            }
+        }
+        model.addAttribute("goods", customUser.getGoods());
+        sumCalc(model, customUser.getGoods());
+        userInitializer(model);
+        return "myBasket";
+    }
+
+    private void sumCalc(Model model, List<? extends Good> goods){
+        double sum = 0;
+        for (Good g : goods){
+            sum += g.getPrice();
+        }
+        model.addAttribute("sum", sum);
+    }
+
+    private void initializer(Model model, Integer pointer, String goodType){
+        List<? extends Good> list;
+        if (GoodType.exists(goodType)){
+            list = goodService.list(GoodType.valueOf(goodType.toUpperCase()));
+            model.addAttribute("goodType", GoodType.valueOf(goodType.toUpperCase()).parseType());
+        } else {
+            list = getService(goodType).list();
+        }
+        List<Good> goodList = new ArrayList<>();
+        goodList.addAll(list);
+
+        //blocks # 1-3: list of spinnings, list of countries and min&max prices -------------
+        ModelInitializer.initialize(model, (ArrayList<Good>) goodList, pointer);
+    }
+
+    private void userInitializer(Model model){
+        //block #4 user name ----------------------------------------------------------------
+        CustomUser customUser = null;
+        String role = null;
+        try {
+            User user = (User) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
+            customUser = userService.getUserByLogin(user.getUsername());
+            role = String.valueOf(customUser.getRole());
+        } catch (ClassCastException ignored){}
+        model.addAttribute("name", ModelInitializer.userInitializer(customUser));
+        model.addAttribute("role", role);
+
+    }
+
+    private AbstractService getService(String kind) {
+        switch (kind) {
+            case "spinning":
+                return spinningService;
+            case "reel":
+                return reelService;
+            case "line":
+                return lineService;
+            default:
+                return goodService;
+        }
+    }
+
+}
